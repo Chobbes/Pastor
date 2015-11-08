@@ -1,0 +1,13 @@
+flags: {}
+packages:
+- '.'
+extra-deps:
+- servant-lucid-0.4.4.5
+- lucid-2.9.3
+- warp-3.1.8
+- http2-1.2.0
+- aeson-0.10.0.0
+- aeson-pretty-0.7.2
+- attoparsec-0.13.0.1
+- acid-state-0.13.1
+resolver: lts-3.10
