@@ -32,10 +32,12 @@ module Main where
 import Servant
 import Servant.Server
 import Servant.HTML.Lucid
+import Servant.JQuery
 import GHC.Generics
 import Network.Wai
 import Network.Wai.Handler.Warp
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Data.Aeson
 import Lucid
 import Control.Monad.Trans.Either
@@ -43,39 +45,64 @@ import Control.Monad.State.Strict
 import Control.Monad.Reader
 import Data.Acid
 import Data.SafeCopy
-import Database                 
+import Database
+import qualified Language.Javascript.JQuery as JQ
 
-type PasteAPI = "view" :> Capture "numPosts" Int :> Get '[JSON, HTML] [Paste]
-                :<|> "paste" :> ReqBody '[JSON] T.Text :> Post '[JSON, HTML] T.Text
+
+type PasteAPI = "view" :> Capture "postId" Int :> Get '[JSON, HTML] (Maybe Paste)
+           :<|> "latest" :> Capture "numPosts" Int :> Get '[JSON, HTML] [Paste]
+           :<|> "paste" :> ReqBody '[JSON] Paste :> Post '[JSON, HTML] T.Text
+
 
 pasteAPI :: Proxy PasteAPI
 pasteAPI = Proxy
 
+type API = PasteAPI :<|> Raw
+
+api :: Proxy API
+api = Proxy
+
 type PasteM = ReaderT (AcidState PasteDB) (EitherT ServantErr IO)
 
-pasteServer :: ServerT PasteAPI PasteM
-pasteServer = viewPastes :<|> makePaste
-  where viewPastes :: Int -> PasteM [Paste]
-        viewPastes n = do db <- ask
-                          liftIO $ query db (ViewPastes n)
 
-        makePaste :: T.Text -> PasteM T.Text
-        makePaste t = do db <- ask
-                         liftIO $ update db (AddPaste t)
+pasteServer :: ServerT PasteAPI PasteM
+pasteServer = viewPaste :<|> latestPastes :<|> makePaste
+  where viewPaste :: Int -> PasteM (Maybe Paste)
+        viewPaste n = do db <- ask
+                         liftIO $ query db (ViewPaste n)
+
+        latestPastes :: Int -> PasteM [Paste]
+        latestPastes n = do db <- ask
+                            liftIO $ query db (LatestPastes n)
+
+        makePaste :: Paste -> PasteM T.Text
+        makePaste p = do db <- ask
+                         liftIO $ update db (AddPaste p)
 
                          return "Paste successfull!"
+
 
 acidToEither :: AcidState PasteDB -> PasteM :~> EitherT ServantErr IO
 acidToEither db = Nat $ acidToEither' db
   where acidToEither' :: forall a. AcidState PasteDB -> PasteM a -> EitherT ServantErr IO a
         acidToEither' db r = runReaderT r db
 
-app :: AcidState PasteDB -> Application
-app db = serve pasteAPI (enter (acidToEither db) pasteServer)
 
-myPastes :: [Paste]
-myPastes = zipWith Paste [1..] ["Yay", "OMG #COOLPASTE}\\", "<em>SCARY HTML</em>"]
+server :: AcidState PasteDB -> Server API
+server db = enter (acidToEither db) pasteServer :<|> serveDirectory "public"
+
+
+app :: AcidState PasteDB -> Application
+app db = serve api (server db)
+
+
+writeJSFiles :: IO ()
+writeJSFiles = do writeFile "public/api.js" $ jsForAPI pasteAPI
+                  jq <- readFile =<< JQ.file
+                  writeFile "public/jq.js" jq
+
 
 main :: IO ()
-main = do db <- openLocalStateFrom ".pastedb/" (PasteDB (0,[]))
+main = do writeJSFiles
+          db <- openLocalStateFrom ".pastedb/" (PasteDB (0,mempty))
           run 8001 (app db)

@@ -37,9 +37,12 @@ import Data.SafeCopy
 import Control.Monad.State
 import Control.Monad.Reader
 import Data.Acid
+import qualified Data.IntMap as IM
+import Data.Maybe
 
--- | Pastes are given a unique integer identifier, and have text content.
-data Paste = Paste { pasteId :: Int
+
+-- | Pastes have a text titles, and content.
+data Paste = Paste { pasteTitle :: T.Text
                    , pasteContent :: T.Text
                    }
              deriving (Generic, Show, Eq)
@@ -53,18 +56,28 @@ instance ToHtml Paste where
 instance ToHtml [Paste] where
   toHtml pastes = div_ $ foldMap toHtml pastes
 
-data PasteDB = PasteDB (Int, [Paste])
+instance ToHtml (Maybe Paste) where
+  toHtml Nothing = div_ . toHtml $ ("No such paste, sorry!" :: T.Text)
+  toHtml (Just paste) = toHtml paste
+
+data PasteDB = PasteDB (Int, IM.IntMap Paste)
 $(deriveSafeCopy 0 'base ''Paste)
 $(deriveSafeCopy 0 'base ''PasteDB)
 
-addPaste :: T.Text -> Update PasteDB ()
-addPaste t = do PasteDB (id, pastes) <- get
 
-                let paste = Paste (id+1) t
-                put $ PasteDB ((id+1), paste:pastes)
+addPaste :: Paste -> Update PasteDB ()
+addPaste paste = do PasteDB (id, pastes) <- get
+                    put $ PasteDB ((id+1), IM.insert (id+1) paste pastes)
 
-viewPastes :: Int -> Query PasteDB [Paste]
-viewPastes n = do PasteDB (_, pastes) <- ask
-                  return $ take n pastes
 
-$(makeAcidic ''PasteDB ['addPaste, 'viewPastes])
+viewPaste :: Int -> Query PasteDB (Maybe Paste)
+viewPaste n = do PasteDB (_, pasteMap) <- ask
+                 return $ IM.lookup n pasteMap
+
+
+latestPastes :: Int -> Query PasteDB [Paste]
+latestPastes n = do PasteDB (lastId, pasteMap) <- ask
+                    return . take n . catMaybes $ [IM.lookup id | id <- [lastId,lastId-1..0]] <*> (return pasteMap)
+
+
+$(makeAcidic ''PasteDB ['addPaste, 'viewPaste, 'latestPastes])
